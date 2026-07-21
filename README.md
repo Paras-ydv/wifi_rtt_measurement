@@ -224,7 +224,7 @@ The `android.hardware.wifi.rtt` feature is declared as `required="true"` in the 
 
 ## Known Limitations
 
-- **Emulator not supported** — Wi-Fi RTT requires real hardware
+- **Emulator not supported for ranging** — Wi-Fi RTT requires real hardware. The Android Emulator has no IEEE 802.11mc simulation; `WifiRttManager.isAvailable()` always returns `false` and `startRanging()` never fires. However, the app installs and runs on an emulator — you can test all UI, navigation, permission dialogs, CSV export, and logging flows. Only the actual ranging step requires a physical device.
 - `WifiManager.startScan()` is deprecated since API 28 but remains the only way to trigger a fresh scan on minSdk 28 without a background service
 - `ScanResult.SSID` is deprecated on API 33+ (use `WifiSsid` instead) — the app uses it for display only and falls back to BSSID if SSID is blank
 - Publisher responder mode requires chipset-level IEEE 802.11mc support — not all Android devices support acting as a responder
