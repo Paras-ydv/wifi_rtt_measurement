@@ -55,6 +55,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.wifirttmeasurement.domain.model.AwareSessionStatus
 import com.example.wifirttmeasurement.domain.model.ConnectionStatus
 import com.example.wifirttmeasurement.domain.model.DashboardStats
 import com.example.wifirttmeasurement.domain.model.LogSeverity
@@ -172,6 +173,7 @@ private fun ReceiverContent(
                         onStop = onStop,
                         onExportCsv = onExportCsv,
                     )
+                    AwareDiscoveryCard(uiState = uiState)
                     StatisticsCards(stats = uiState.dashboardStats)
 
                     if (isExpanded) {
@@ -672,6 +674,109 @@ private fun LogSeverity.color(): Color {
         LogSeverity.Info -> RttGreen
         LogSeverity.Warning -> RttAmber
         LogSeverity.Error -> RttRed
+    }
+}
+
+@Composable
+private fun AwareDiscoveryCard(uiState: ReceiverUiState) {
+    val aware = uiState.awareDiscoveryState
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Wi-Fi Aware Discovery",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                AwareStatusChip(status = aware.status)
+            }
+            if (aware.errorMessage != null) {
+                Text(
+                    text = aware.errorMessage,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = RttAmber,
+                )
+            }
+            if (aware.activePeers.isEmpty()) {
+                Text(
+                    text = when (aware.status) {
+                        AwareSessionStatus.Idle -> "Press Scan to start peer discovery"
+                        AwareSessionStatus.Attaching -> "Attaching to Wi-Fi Aware..."
+                        AwareSessionStatus.Attached -> "Attached — starting sessions..."
+                        AwareSessionStatus.Publishing -> "Publish session starting..."
+                        AwareSessionStatus.Subscribing -> "Subscribe session starting..."
+                        AwareSessionStatus.Active -> "Listening for peers..."
+                        AwareSessionStatus.Unavailable -> "Wi-Fi Aware not available on this device"
+                        AwareSessionStatus.Error -> "Discovery error — tap Scan to retry"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                aware.activePeers.forEach { peer ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(RttGreen),
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = peer.peerId,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                text = "Discovered ${peer.discoveredAtMillis.formatTimestamp()} · Last seen ${peer.lastSeenMillis.formatTimestamp()}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AwareStatusChip(status: AwareSessionStatus) {
+    val (color, label) = when (status) {
+        AwareSessionStatus.Active -> RttGreen to "Active"
+        AwareSessionStatus.Attaching,
+        AwareSessionStatus.Attached,
+        AwareSessionStatus.Publishing,
+        AwareSessionStatus.Subscribing -> RttAmber to "Starting"
+        AwareSessionStatus.Error -> RttRed to "Error"
+        AwareSessionStatus.Unavailable -> RttRed to "Unavailable"
+        AwareSessionStatus.Idle -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
+    }
+    Surface(
+        color = color.copy(alpha = 0.12f),
+        contentColor = color,
+        shape = RoundedCornerShape(50),
+    ) {
+        Text(
+            text = label,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

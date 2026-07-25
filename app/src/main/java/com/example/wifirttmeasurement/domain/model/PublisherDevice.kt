@@ -9,4 +9,6 @@ data class PublisherDevice(
     val lastRssiDbm: Int?,
     val lastMeasurementTimestampMillis: Long?,
     val isSelected: Boolean = false,
+    /** Non-null when this device was discovered via Wi-Fi Aware (phone-to-phone). */
+    val awarePeerId: String? = null,
 )

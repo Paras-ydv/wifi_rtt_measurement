@@ -10,15 +10,35 @@ import javax.inject.Singleton
 @Singleton
 class RttScanCoordinator @Inject constructor(
     private val androidRttManager: AndroidRttManager,
+    private val wifiAwareDiscoveryManager: WifiAwareDiscoveryManager,
 ) {
     // Cache BSSID -> ScanResult so the measurement engine can look up the AP.
     private val scanCache = mutableMapOf<String, ScanResult>()
 
     suspend fun scanPublishers(): List<PublisherDevice> {
-        val results = androidRttManager.scanRttCapableAps()
+        val apResults = androidRttManager.scanRttCapableAps()
         scanCache.clear()
-        results.forEach { scanCache[it.BSSID] = it }
-        return results.map { it.toPublisherDevice() }
+        apResults.forEach { scanCache[it.BSSID] = it }
+        val apDevices = apResults.map { it.toPublisherDevice() }
+
+        // Merge in any active Wi-Fi Aware peers (phone-to-phone) that aren't already in the AP list
+        val apIds = apDevices.map { it.id }.toSet()
+        val awareDevices = wifiAwareDiscoveryManager.state.value.activePeers
+            .filter { it.peerId !in apIds }
+            .map { peer ->
+                PublisherDevice(
+                    id = peer.peerId,
+                    name = peer.peerId,
+                    connectionStatus = ConnectionStatus.Disconnected,
+                    status = PublisherStatus.Waiting,
+                    lastMeasuredDistanceMeters = null,
+                    lastRssiDbm = null,
+                    lastMeasurementTimestampMillis = null,
+                    awarePeerId = peer.peerId,
+                )
+            }
+
+        return apDevices + awareDevices
     }
 
     fun getScanResult(publisherId: String): ScanResult? = scanCache[publisherId]

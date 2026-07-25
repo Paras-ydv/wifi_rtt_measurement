@@ -2,6 +2,7 @@ package com.example.wifirttmeasurement.presentation.ui.publisher
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.wifirttmeasurement.data.rtt.WifiAwareDiscoveryManager
 import com.example.wifirttmeasurement.domain.model.PublisherState
 import com.example.wifirttmeasurement.domain.usecase.ObserveLogsUseCase
 import com.example.wifirttmeasurement.domain.usecase.ObservePublisherStatusUseCase
@@ -24,6 +25,7 @@ class PublisherViewModel @Inject constructor(
     private val startPublishingUseCase: StartPublishingUseCase,
     private val stopPublishingUseCase: StopPublishingUseCase,
     private val refreshPublisherStatusUseCase: RefreshPublisherStatusUseCase,
+    private val wifiAwareDiscoveryManager: WifiAwareDiscoveryManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PublisherUiState())
     val uiState: StateFlow<PublisherUiState> = _uiState.asStateFlow()
@@ -49,12 +51,14 @@ class PublisherViewModel @Inject constructor(
     }
 
     fun startPublishing() {
+        wifiAwareDiscoveryManager.start()
         runPublisherAction {
             startPublishingUseCase()
         }
     }
 
     fun stopPublishing() {
+        wifiAwareDiscoveryManager.stop()
         runPublisherAction {
             stopPublishingUseCase()
         }
@@ -68,6 +72,11 @@ class PublisherViewModel @Inject constructor(
 
     fun onErrorMessageShown() {
         _uiState.update { it.copy(errorMessage = null) }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        wifiAwareDiscoveryManager.stop()
     }
 
     private fun runPublisherAction(action: suspend () -> Unit) {

@@ -1,6 +1,7 @@
 package com.example.wifirttmeasurement.presentation.ui.receiver
 
 import android.net.Uri
+import com.example.wifirttmeasurement.domain.model.AwareDiscoveryState
 import com.example.wifirttmeasurement.domain.model.DashboardStats
 import com.example.wifirttmeasurement.domain.model.MeasurementLog
 import com.example.wifirttmeasurement.domain.model.MeasurementResult
@@ -20,12 +21,10 @@ data class ReceiverUiState(
     val showPermissionRequest: Boolean = false,
     val exportedCsvUri: Uri? = null,
     val showPermissionDeniedDialog: Boolean = false,
+    val awareDiscoveryState: AwareDiscoveryState = AwareDiscoveryState(),
 ) {
-    val hasPublishers: Boolean
-        get() = publishers.isNotEmpty()
-
-    val hasSelectedPublishers: Boolean
-        get() = publishers.any { it.isSelected }
+    val hasPublishers: Boolean get() = publishers.isNotEmpty()
+    val hasSelectedPublishers: Boolean get() = publishers.any { it.isSelected }
 
     companion object {
         fun from(
@@ -34,19 +33,19 @@ data class ReceiverUiState(
             errorMessage: String? = null,
             permissionState: RttPermissionState = RttPermissionState.Denied,
             showPermissionRequest: Boolean = false,
-        ): ReceiverUiState {
-            return ReceiverUiState(
-                publishers = receiverState.publishers,
-                measurements = receiverState.measurements,
-                dashboardStats = receiverState.dashboardStats,
-                logs = logs,
-                isScanning = receiverState.isScanning,
-                isMeasuring = receiverState.isMeasuring,
-                errorMessage = errorMessage,
-                permissionState = permissionState,
-                showPermissionRequest = showPermissionRequest,
-                exportedCsvUri = null,
-            )
-        }
+            awareDiscoveryState: AwareDiscoveryState = AwareDiscoveryState(),
+        ): ReceiverUiState = ReceiverUiState(
+            publishers = receiverState.publishers,
+            measurements = receiverState.measurements,
+            dashboardStats = receiverState.dashboardStats,
+            logs = logs,
+            isScanning = receiverState.isScanning,
+            isMeasuring = receiverState.isMeasuring,
+            errorMessage = errorMessage,
+            permissionState = permissionState,
+            showPermissionRequest = showPermissionRequest,
+            exportedCsvUri = null,
+            awareDiscoveryState = awareDiscoveryState,
+        )
     }
 }
