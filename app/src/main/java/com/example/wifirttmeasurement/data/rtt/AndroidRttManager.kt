@@ -14,6 +14,8 @@ import android.net.wifi.rtt.RangingResult
 import android.net.wifi.rtt.RangingResultCallback
 import android.net.wifi.rtt.WifiRttManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.content.ContextCompat
 import com.example.wifirttmeasurement.domain.model.MeasurementResult
 import com.example.wifirttmeasurement.domain.model.MeasurementStatus
@@ -23,7 +25,6 @@ import android.util.Log
 import com.example.wifirttmeasurement.domain.model.LogSeverity
 import com.example.wifirttmeasurement.domain.repository.LogRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.concurrent.Executor
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
@@ -39,6 +40,12 @@ class AndroidRttManager @Inject constructor(
     private val logRepository: LogRepository,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainExecutor = android.os.Handler(Looper.getMainLooper()).let { h ->
+        android.os.Handler(Looper.getMainLooper()).run {
+            java.util.concurrent.Executor { r -> this.post(r) }
+        }
+    }
     private val wifiManager: WifiManager? =
         context.getSystemService(WifiManager::class.java)
 
@@ -126,10 +133,9 @@ class AndroidRttManager @Inject constructor(
             val request = RangingRequest.Builder()
                 .addWifiAwarePeer(peerHandle)
                 .build()
-            val executor = Executor { runnable -> runnable.run() }
             rttManager.startRanging(
                 request,
-                executor,
+                mainExecutor,
                 object : RangingResultCallback() {
                     override fun onRangingResults(results: List<RangingResult>) {
                         Log.d(TAG, "rangeAwarePeer onRangingResults: count=${results.size}")
@@ -209,11 +215,9 @@ class AndroidRttManager @Inject constructor(
                 .addAccessPoint(scanResult)
                 .build()
 
-            val executor = Executor { runnable -> runnable.run() }
-
             rttManager.startRanging(
                 request,
-                executor,
+                mainExecutor,
                 object : RangingResultCallback() {
                     override fun onRangingResults(results: List<RangingResult>) {
                         Log.d(TAG, "range onRangingResults: count=${results.size}")
