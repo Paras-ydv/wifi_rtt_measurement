@@ -33,6 +33,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 
 @Singleton
 class AndroidRttManager @Inject constructor(
@@ -60,50 +61,43 @@ class AndroidRttManager @Inject constructor(
         val cached = wifiManager?.scanResults
             ?.filter { it.is80211mcResponder }
             ?: emptyList()
-
         if (cached.isNotEmpty()) return cached
 
-        return suspendCancellableCoroutine { cont ->
-            var receiverRegistered = false
-            val receiver = object : BroadcastReceiver() {
-                override fun onReceive(ctx: Context, intent: Intent) {
-                    receiverRegistered = false
-                    context.unregisterReceiver(this)
-                    val success = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
-                    val results = if (success) {
-                        wifiManager?.scanResults?.filter { it.is80211mcResponder } ?: emptyList()
-                    } else {
-                        emptyList()
+        return withTimeoutOrNull(SCAN_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                var receiverRegistered = false
+                val receiver = object : BroadcastReceiver() {
+                    override fun onReceive(ctx: Context, intent: Intent) {
+                        receiverRegistered = false
+                        context.unregisterReceiver(this)
+                        val success = intent.getBooleanExtra(WifiManager.EXTRA_RESULTS_UPDATED, false)
+                        val results = if (success) {
+                            wifiManager?.scanResults?.filter { it.is80211mcResponder } ?: emptyList()
+                        } else {
+                            emptyList()
+                        }
+                        cont.resume(results)
                     }
-                    cont.resume(results)
+                }
+                val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) Context.RECEIVER_NOT_EXPORTED else 0
+                context.registerReceiver(receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), flags)
+                receiverRegistered = true
+                cont.invokeOnCancellation {
+                    if (receiverRegistered) {
+                        receiverRegistered = false
+                        runCatching { context.unregisterReceiver(receiver) }
+                    }
+                }
+                val started = wifiManager?.startScan() ?: false
+                if (!started) {
+                    if (receiverRegistered) {
+                        receiverRegistered = false
+                        context.unregisterReceiver(receiver)
+                    }
+                    cont.resume(emptyList())
                 }
             }
-            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                Context.RECEIVER_NOT_EXPORTED
-            } else {
-                0
-            }
-            context.registerReceiver(
-                receiver,
-                IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
-                flags,
-            )
-            receiverRegistered = true
-            cont.invokeOnCancellation {
-                if (receiverRegistered) {
-                    receiverRegistered = false
-                    runCatching { context.unregisterReceiver(receiver) }
-                }
-            }
-            val started = wifiManager?.startScan() ?: false
-            if (!started) {
-                if (receiverRegistered) {
-                    receiverRegistered = false
-                    context.unregisterReceiver(receiver)
-                }
-                cont.resume(emptyList())
-            }
-        }
+        } ?: emptyList()
     }
 
     /** Ranges to a Wi-Fi Aware [PeerHandle] (phone-to-phone) and returns the result. */
@@ -133,74 +127,78 @@ class AndroidRttManager @Inject constructor(
             " device=${Build.MANUFACTURER} ${Build.MODEL}")
         uiLog("[RTT] startRanging → handle=${peerHandle.hashCode()} id=${publisher.id} rttAvail=${rttManager.isAvailable}")
 
-        return suspendCancellableCoroutine { cont ->
-            val request = RangingRequest.Builder()
-                .addWifiAwarePeer(peerHandle)
-                .setRttBurstSize(RangingRequest.getMaxRttBurstSize())
-                .build()
-            Log.d(TAG, "rangeAwarePeer() request built: burstSize=${RangingRequest.getMaxRttBurstSize()}")
-            rttManager.startRanging(
-                request,
-                rttExecutor,
-                object : RangingResultCallback() {
-                    override fun onRangingResults(results: List<RangingResult>) {
-                        val result = results.firstOrNull()
-                        if (result == null) {
-                            Log.w(TAG, "rangeAwarePeer: empty results list")
-                            return cont.resume(unsupportedResult(publisher))
+        return withTimeoutOrNull(RTT_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                val request = RangingRequest.Builder()
+                    .addWifiAwarePeer(peerHandle)
+                    .setRttBurstSize(RangingRequest.getMaxRttBurstSize())
+                    .build()
+                Log.d(TAG, "rangeAwarePeer() request built: burstSize=${RangingRequest.getMaxRttBurstSize()}")
+                rttManager.startRanging(
+                    request,
+                    rttExecutor,
+                    object : RangingResultCallback() {
+                        override fun onRangingResults(results: List<RangingResult>) {
+                            val result = results.firstOrNull()
+                            if (result == null) {
+                                Log.w(TAG, "rangeAwarePeer: empty results list")
+                                return cont.resume(unsupportedResult(publisher))
+                            }
+                            val success = result.status == RangingResult.STATUS_SUCCESS
+                            Log.d(TAG, "rangeAwarePeer result:" +
+                                " status=${statusCodeName(result.status)}(${result.status})" +
+                                " distanceMm=${if (success) result.distanceMm else -1}" +
+                                " stdDevMm=${if (success) result.distanceStdDevMm else -1}" +
+                                " rssi=${if (success) result.rssi else -999}" +
+                                " numAttempted=${if (success) result.numAttemptedMeasurements else -1}" +
+                                " numSuccessful=${if (success) result.numSuccessfulMeasurements else -1}" +
+                                " peerHandle=${peerHandle.hashCode()}" +
+                                " sdk=${Build.VERSION.SDK_INT}" +
+                                " device=${Build.MODEL}")
+                            val sev = if (success) LogSeverity.Info else LogSeverity.Error
+                            val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
+                            val rssiLog = if (success) "${result.rssi}" else "n/a"
+                            uiLog("[RTT] Aware result: ${statusCodeName(result.status)} dist=$distanceLog rssi=$rssiLog", sev)
+                            cont.resume(
+                                MeasurementResult(
+                                    timestampMillis = System.currentTimeMillis(),
+                                    publisherId = publisher.id,
+                                    publisherName = publisher.name,
+                                    distanceMeters = if (success) result.distanceMm / 1000.0 else null,
+                                    distanceStandardDeviationMeters = if (success) result.distanceStdDevMm / 1000.0 else null,
+                                    rssiDbm = if (success) result.rssi else publisher.lastRssiDbm,
+                                    status = if (success) MeasurementStatus.Success else MeasurementStatus.Failed,
+                                    failureReason = if (success) RttFailureReason.None else apiStatusToReason(result.status),
+                                    roundNumber = 0,
+                                    measurementNumber = 0,
+                                ),
+                            )
                         }
-                        val success = result.status == RangingResult.STATUS_SUCCESS
-                        // Log ALL available fields — safe guards on non-SUCCESS fields
-                        Log.d(TAG, "rangeAwarePeer result:" +
-                            " status=${statusCodeName(result.status)}(${result.status})" +
-                            " distanceMm=${if (success) result.distanceMm else -1}" +
-                            " stdDevMm=${if (success) result.distanceStdDevMm else -1}" +
-                            " rssi=${if (success) result.rssi else -999}" +
-                            " numAttempted=${if (success) result.numAttemptedMeasurements else -1}" +
-                            " numSuccessful=${if (success) result.numSuccessfulMeasurements else -1}" +
-                            " peerHandle=${peerHandle.hashCode()}" +
-                            " sdk=${Build.VERSION.SDK_INT}" +
-                            " device=${Build.MODEL}")
-                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
-                        val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
-                        val rssiLog = if (success) "${result.rssi}" else "n/a"
-                        uiLog("[RTT] Aware result: ${statusCodeName(result.status)} dist=$distanceLog rssi=$rssiLog", sev)
-                        cont.resume(
-                            MeasurementResult(
-                                timestampMillis = System.currentTimeMillis(),
-                                publisherId = publisher.id,
-                                publisherName = publisher.name,
-                                distanceMeters = if (success) result.distanceMm / 1000.0 else null,
-                                distanceStandardDeviationMeters = if (success) result.distanceStdDevMm / 1000.0 else null,
-                                rssiDbm = if (success) result.rssi else publisher.lastRssiDbm,
-                                status = if (success) MeasurementStatus.Success else MeasurementStatus.Failed,
-                                failureReason = if (success) RttFailureReason.None else apiStatusToReason(result.status),
-                                roundNumber = 0,
-                                measurementNumber = 0,
-                            ),
-                        )
-                    }
-                    override fun onRangingFailure(code: Int) {
-                        val codeName = failureCodeName(code)
-                        Log.e(TAG, "rangeAwarePeer onRangingFailure: code=$codeName($code) device=${Build.MODEL}")
-                        uiLog("[RTT] Aware onRangingFailure: $codeName($code)", LogSeverity.Error)
-                        cont.resume(
-                            MeasurementResult(
-                                timestampMillis = System.currentTimeMillis(),
-                                publisherId = publisher.id,
-                                publisherName = publisher.name,
-                                distanceMeters = null,
-                                distanceStandardDeviationMeters = null,
-                                rssiDbm = publisher.lastRssiDbm,
-                                status = MeasurementStatus.Failed,
-                                failureReason = callbackCodeToReason(code),
-                                roundNumber = 0,
-                                measurementNumber = 0,
-                            ),
-                        )
-                    }
-                },
-            )
+                        override fun onRangingFailure(code: Int) {
+                            val codeName = failureCodeName(code)
+                            Log.e(TAG, "rangeAwarePeer onRangingFailure: code=$codeName($code) device=${Build.MODEL}")
+                            uiLog("[RTT] Aware onRangingFailure: $codeName($code)", LogSeverity.Error)
+                            cont.resume(
+                                MeasurementResult(
+                                    timestampMillis = System.currentTimeMillis(),
+                                    publisherId = publisher.id,
+                                    publisherName = publisher.name,
+                                    distanceMeters = null,
+                                    distanceStandardDeviationMeters = null,
+                                    rssiDbm = publisher.lastRssiDbm,
+                                    status = MeasurementStatus.Failed,
+                                    failureReason = callbackCodeToReason(code),
+                                    roundNumber = 0,
+                                    measurementNumber = 0,
+                                ),
+                            )
+                        }
+                    },
+                )
+            }
+        } ?: run {
+            Log.w(TAG, "rangeAwarePeer: timed out after ${RTT_TIMEOUT_MS}ms")
+            unsupportedResult(publisher)
         }
     }
 
@@ -226,67 +224,70 @@ class AndroidRttManager @Inject constructor(
 
         Log.d(TAG, "range() → startRanging AP bssid=${scanResult.BSSID} publisher=${publisher.id}")
         uiLog("[RTT] startRanging → AP bssid=${scanResult.BSSID}")
-        return suspendCancellableCoroutine { cont ->
-            val request = RangingRequest.Builder()
-                .addAccessPoint(scanResult)
-                .build()
-
-            rttManager.startRanging(
-                request,
-                rttExecutor,
-                object : RangingResultCallback() {
-                    override fun onRangingResults(results: List<RangingResult>) {
-                        Log.d(TAG, "range onRangingResults: count=${results.size}")
-                        val result = results.firstOrNull()
-                        if (result == null) {
-                            Log.w(TAG, "range: empty results list")
-                            cont.resume(unsupportedResult(publisher))
-                            return
+        return withTimeoutOrNull(RTT_TIMEOUT_MS) {
+            suspendCancellableCoroutine { cont ->
+                val request = RangingRequest.Builder()
+                    .addAccessPoint(scanResult)
+                    .build()
+                rttManager.startRanging(
+                    request,
+                    rttExecutor,
+                    object : RangingResultCallback() {
+                        override fun onRangingResults(results: List<RangingResult>) {
+                            Log.d(TAG, "range onRangingResults: count=${results.size}")
+                            val result = results.firstOrNull()
+                            if (result == null) {
+                                Log.w(TAG, "range: empty results list")
+                                cont.resume(unsupportedResult(publisher))
+                                return
+                            }
+                            val statusName = statusCodeName(result.status)
+                            val success = result.status == RangingResult.STATUS_SUCCESS
+                            val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
+                            val rssiLog = if (success) "${result.rssi}" else "n/a"
+                            Log.d(TAG, "range result: status=$statusName(${result.status}) distanceMm=$distanceLog rssi=$rssiLog")
+                            val sev = if (success) LogSeverity.Info else LogSeverity.Error
+                            uiLog("[RTT] AP result: $statusName dist=$distanceLog rssi=$rssiLog", sev)
+                            cont.resume(
+                                MeasurementResult(
+                                    timestampMillis = System.currentTimeMillis(),
+                                    publisherId = publisher.id,
+                                    publisherName = publisher.name,
+                                    distanceMeters = if (success) result.distanceMm / 1000.0 else null,
+                                    distanceStandardDeviationMeters = if (success) result.distanceStdDevMm / 1000.0 else null,
+                                    rssiDbm = if (success) result.rssi else publisher.lastRssiDbm,
+                                    status = if (success) MeasurementStatus.Success else MeasurementStatus.Failed,
+                                    failureReason = if (success) RttFailureReason.None else apiStatusToReason(result.status),
+                                    roundNumber = 0,
+                                    measurementNumber = 0,
+                                ),
+                            )
                         }
-                        val statusName = statusCodeName(result.status)
-                        val success = result.status == RangingResult.STATUS_SUCCESS
-                        val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
-                        val rssiLog = if (success) "${result.rssi}" else "n/a"
-                        Log.d(TAG, "range result: status=$statusName(${result.status}) distanceMm=$distanceLog rssi=$rssiLog")
-                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
-                        uiLog("[RTT] AP result: $statusName dist=$distanceLog rssi=$rssiLog", sev)
-                        cont.resume(
-                            MeasurementResult(
-                                timestampMillis = System.currentTimeMillis(),
-                                publisherId = publisher.id,
-                                publisherName = publisher.name,
-                                distanceMeters = if (success) result.distanceMm / 1000.0 else null,
-                                distanceStandardDeviationMeters = if (success) result.distanceStdDevMm / 1000.0 else null,
-                                rssiDbm = if (success) result.rssi else publisher.lastRssiDbm,
-                                status = if (success) MeasurementStatus.Success else MeasurementStatus.Failed,
-                                failureReason = if (success) RttFailureReason.None else apiStatusToReason(result.status),
-                                roundNumber = 0,
-                                measurementNumber = 0,
-                            ),
-                        )
-                    }
-
-                    override fun onRangingFailure(code: Int) {
-                        val codeName = failureCodeName(code)
-                        Log.e(TAG, "range onRangingFailure: code=$codeName($code)")
-                        uiLog("[RTT] AP onRangingFailure: $codeName($code)", LogSeverity.Error)
-                        cont.resume(
-                            MeasurementResult(
-                                timestampMillis = System.currentTimeMillis(),
-                                publisherId = publisher.id,
-                                publisherName = publisher.name,
-                                distanceMeters = null,
-                                distanceStandardDeviationMeters = null,
-                                rssiDbm = publisher.lastRssiDbm,
-                                status = MeasurementStatus.Failed,
-                                failureReason = callbackCodeToReason(code),
-                                roundNumber = 0,
-                                measurementNumber = 0,
-                            ),
-                        )
-                    }
-                },
-            )
+                        override fun onRangingFailure(code: Int) {
+                            val codeName = failureCodeName(code)
+                            Log.e(TAG, "range onRangingFailure: code=$codeName($code)")
+                            uiLog("[RTT] AP onRangingFailure: $codeName($code)", LogSeverity.Error)
+                            cont.resume(
+                                MeasurementResult(
+                                    timestampMillis = System.currentTimeMillis(),
+                                    publisherId = publisher.id,
+                                    publisherName = publisher.name,
+                                    distanceMeters = null,
+                                    distanceStandardDeviationMeters = null,
+                                    rssiDbm = publisher.lastRssiDbm,
+                                    status = MeasurementStatus.Failed,
+                                    failureReason = callbackCodeToReason(code),
+                                    roundNumber = 0,
+                                    measurementNumber = 0,
+                                ),
+                            )
+                        }
+                    },
+                )
+            }
+        } ?: run {
+            Log.w(TAG, "range: timed out after ${RTT_TIMEOUT_MS}ms")
+            unsupportedResult(publisher)
         }
     }
 
@@ -339,5 +340,7 @@ class AndroidRttManager @Inject constructor(
 
     companion object {
         private const val TAG = "AndroidRttManager"
+        private const val SCAN_TIMEOUT_MS = 5_000L
+        private const val RTT_TIMEOUT_MS = 4_000L
     }
 }
