@@ -85,6 +85,12 @@ fun ReceiverScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
 
+    // Start Wi-Fi Aware discovery immediately — don't wait for the user to tap Scan.
+    // start() is idempotent; calling it again after permissions are granted is safe.
+    LaunchedEffect(uiState.permissionState.allGranted) {
+        if (uiState.permissionState.allGranted) viewModel.startAwareDiscovery()
+    }
+
     LaunchedEffect(uiState.exportedCsvUri) {
         val uri = uiState.exportedCsvUri ?: return@LaunchedEffect
         val shareIntent = Intent(Intent.ACTION_SEND).apply {

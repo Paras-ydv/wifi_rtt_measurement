@@ -51,27 +51,39 @@ class ReceiverViewModel @Inject constructor(
                 // Merge Aware peers: preserve existing PublisherDevice state (connectionStatus,
                 // lastRssiDbm, etc.) so measurement results are not overwritten on re-emission.
                 val repoIds = receiverState.publishers.map { it.id }.toSet()
+                // All current active peer IDs from Aware (may include renamed peers)
+                val activePeerIds = awareState.activePeers.map { it.peerId }.toSet()
                 val existingAwareById = _uiState.value.publishers
                     .filter { it.awarePeerId != null }
                     .associateBy { it.id }
                 val awarePeers = awareState.activePeers
                     .filter { it.peerId !in repoIds }
                     .map { peer ->
-                        existingAwareById[peer.peerId] ?: PublisherDevice(
-                            id = peer.peerId,
-                            name = peer.peerId,
-                            connectionStatus = ConnectionStatus.Disconnected,
-                            status = PublisherStatus.Waiting,
-                            lastMeasuredDistanceMeters = null,
-                            lastRssiDbm = null,
-                            lastMeasurementTimestampMillis = null,
-                            awarePeerId = peer.peerId,
-                        )
+                        // Reuse existing entry if id matches, OR if it was a placeholder
+                        // (peer-<handle>) that has since been renamed to a real id.
+                        existingAwareById[peer.peerId]
+                            ?: existingAwareById["peer-${peer.peerHandle.hashCode()}"]
+                                ?.copy(id = peer.peerId, name = peer.peerId, awarePeerId = peer.peerId)
+                            ?: PublisherDevice(
+                                id = peer.peerId,
+                                name = peer.peerId,
+                                connectionStatus = ConnectionStatus.Disconnected,
+                                status = PublisherStatus.Waiting,
+                                lastMeasuredDistanceMeters = null,
+                                lastRssiDbm = null,
+                                lastMeasurementTimestampMillis = null,
+                                awarePeerId = peer.peerId,
+                            )
                     }
-                // Merge repo publishers (which carry updated connectionStatus/rssi from measurements)
-                // with Aware-only peers, deduplicating by id.
+                // Merge repo publishers with Aware peers. Drop stale placeholder entries
+                // (peer-<handle>) whose peer has since been renamed to a real id.
                 val mergedById = (receiverState.publishers + awarePeers).associateBy { it.id }
-                val mergedPublishers = mergedById.values.toList()
+                val mergedPublishers = mergedById.values
+                    .filter { p ->
+                        val isPlaceholder = p.awarePeerId?.startsWith("peer-") == true
+                        !isPlaceholder || p.awarePeerId in activePeerIds
+                    }
+                    .toList()
                 ReceiverUiState.from(
                     receiverState = receiverState.copy(publishers = mergedPublishers),
                     logs = logs,
@@ -91,12 +103,17 @@ class ReceiverViewModel @Inject constructor(
         }
     }
 
+    /** Called once when the screen is ready and permissions are confirmed. */
+    fun startAwareDiscovery() {
+        if (_uiState.value.permissionState.allGranted) wifiAwareDiscoveryManager.start()
+    }
+
     fun scanPublishers() {
         if (!_uiState.value.permissionState.allGranted) {
             _uiState.update { it.copy(showPermissionRequest = true) }
             return
         }
-        // Start Wi-Fi Aware discovery (simultaneous publish + subscribe) then scan RTT APs
+        // Ensure Aware is running (no-op if already attached)
         wifiAwareDiscoveryManager.start()
         runReceiverAction { scanPublishersUseCase() }
     }
@@ -133,7 +150,10 @@ class ReceiverViewModel @Inject constructor(
                 showPermissionDeniedDialog = !state.allGranted,
             )
         }
-        if (state.allGranted) runReceiverAction { scanPublishersUseCase() }
+        if (state.allGranted) {
+            wifiAwareDiscoveryManager.start()
+            runReceiverAction { scanPublishersUseCase() }
+        }
     }
 
     fun dismissPermissionRequest() {

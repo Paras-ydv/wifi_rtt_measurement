@@ -91,6 +91,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
             _state.update { it.copy(status = AwareSessionStatus.Error, errorMessage = "Permissions denied") }
             return
         }
+        // Already attached — sessions are alive, nothing to do
+        if (awareSession != null) { log("start() — session already active, skipping attach"); return }
         log("isAvailable=${wifiAwareManager.isAvailable}")
         registerAvailabilityReceiver()
         if (wifiAwareManager.isAvailable) attach() else {
@@ -142,7 +144,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
                 awareSession = null; publishSession = null; subscribeSession = null
                 publishActive = false; subscribeActive = false
                 _state.update { it.copy(status = AwareSessionStatus.Error, errorMessage = "Session terminated") }
-                mainHandler.postDelayed({ attach() }, RETRY_DELAY_MS)
+                if (hasRequiredPermissions()) mainHandler.postDelayed({ attach() }, RETRY_DELAY_MS)
+                else log("onAwareSessionTerminated() — skipping reattach, permissions missing", LogSeverity.Warning)
             }
         }, mainHandler)
     }
@@ -188,7 +191,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
             override fun onSessionTerminated() {
                 log("onSessionTerminated(publish) — restarting", LogSeverity.Warning)
                 publishSession = null; publishActive = false
-                awareSession?.let { startPublish(it) }
+                if (hasRequiredPermissions()) awareSession?.let { startPublish(it) }
+                else log("onSessionTerminated(publish) — skipping restart, permissions missing", LogSeverity.Warning)
             }
 
             // Publish side should not discover services — log if it happens unexpectedly
@@ -207,7 +211,7 @@ class WifiAwareDiscoveryManager @Inject constructor(
         log("startSubscribe() → service='$SERVICE_NAME'")
         val config = SubscribeConfig.Builder()
             .setServiceName(SERVICE_NAME)
-            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_PASSIVE)
+            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_ACTIVE)
             .setMaxDistanceMm(100_000)
             .build()
 
@@ -252,7 +256,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
             override fun onSessionTerminated() {
                 log("onSessionTerminated(subscribe) — restarting", LogSeverity.Warning)
                 subscribeSession = null; subscribeActive = false
-                awareSession?.let { startSubscribe(it) }
+                if (hasRequiredPermissions()) awareSession?.let { startSubscribe(it) }
+                else log("onSessionTerminated(subscribe) — skipping restart, permissions missing", LogSeverity.Warning)
             }
         }, mainHandler)
     }
