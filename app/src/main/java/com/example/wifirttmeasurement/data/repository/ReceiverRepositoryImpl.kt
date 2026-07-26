@@ -58,10 +58,16 @@ class ReceiverRepositoryImpl @Inject constructor(
     override suspend fun syncPublishers(publishers: List<PublisherDevice>) {
         _receiverState.update { current ->
             val currentById = current.publishers.associateBy { it.id }
+            // Preserve selection state from repo; preserve measurement results (rssi, distance,
+            // connectionStatus) from the incoming list which may be more up-to-date.
             val synced = publishers.map { p ->
-                p.copy(isSelected = currentById[p.id]?.isSelected ?: p.isSelected)
+                val existing = currentById[p.id]
+                p.copy(isSelected = existing?.isSelected ?: p.isSelected)
             }
-            current.copy(publishers = synced)
+            // Also keep any repo-only publishers not present in the incoming list.
+            val incomingIds = publishers.map { it.id }.toSet()
+            val repoOnly = current.publishers.filter { it.id !in incomingIds }
+            current.copy(publishers = synced + repoOnly)
         }
     }
 

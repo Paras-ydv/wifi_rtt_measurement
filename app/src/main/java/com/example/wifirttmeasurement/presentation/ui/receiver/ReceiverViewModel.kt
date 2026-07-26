@@ -48,15 +48,16 @@ class ReceiverViewModel @Inject constructor(
                 observeLogsUseCase(),
                 wifiAwareDiscoveryManager.state,
             ) { receiverState, logs, awareState ->
-                // Merge Aware peers into the AP-scanned list. Dedup against the full
-                // current UI list (not just receiverState.publishers) to prevent the
-                // same peer being appended on every combine() re-emission.
-                val existingIds = (_uiState.value.publishers.map { it.id } +
-                    receiverState.publishers.map { it.id }).toSet()
-                val newAwarePeers = awareState.activePeers
-                    .filter { it.peerId !in existingIds }
+                // Merge Aware peers: preserve existing PublisherDevice state (connectionStatus,
+                // lastRssiDbm, etc.) so measurement results are not overwritten on re-emission.
+                val repoIds = receiverState.publishers.map { it.id }.toSet()
+                val existingAwareById = _uiState.value.publishers
+                    .filter { it.awarePeerId != null }
+                    .associateBy { it.id }
+                val awarePeers = awareState.activePeers
+                    .filter { it.peerId !in repoIds }
                     .map { peer ->
-                        PublisherDevice(
+                        existingAwareById[peer.peerId] ?: PublisherDevice(
                             id = peer.peerId,
                             name = peer.peerId,
                             connectionStatus = ConnectionStatus.Disconnected,
@@ -67,7 +68,10 @@ class ReceiverViewModel @Inject constructor(
                             awarePeerId = peer.peerId,
                         )
                     }
-                val mergedPublishers = receiverState.publishers + newAwarePeers
+                // Merge repo publishers (which carry updated connectionStatus/rssi from measurements)
+                // with Aware-only peers, deduplicating by id.
+                val mergedById = (receiverState.publishers + awarePeers).associateBy { it.id }
+                val mergedPublishers = mergedById.values.toList()
                 ReceiverUiState.from(
                     receiverState = receiverState.copy(publishers = mergedPublishers),
                     logs = logs,
@@ -77,7 +81,12 @@ class ReceiverViewModel @Inject constructor(
                     awareDiscoveryState = awareState,
                 )
             }.collect { nextState ->
-                _uiState.value = nextState
+                _uiState.update { current ->
+                    nextState.copy(
+                        exportedCsvUri = current.exportedCsvUri,
+                        showPermissionDeniedDialog = current.showPermissionDeniedDialog,
+                    )
+                }
             }
         }
     }
