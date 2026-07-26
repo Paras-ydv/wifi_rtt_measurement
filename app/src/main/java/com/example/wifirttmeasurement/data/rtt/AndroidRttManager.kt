@@ -145,10 +145,12 @@ class AndroidRttManager @Inject constructor(
                             return cont.resume(unsupportedResult(publisher))
                         }
                         val statusName = statusCodeName(result.status)
-                        Log.d(TAG, "rangeAwarePeer result: status=$statusName(${result.status}) distanceMm=${result.distanceMm} rssi=${result.rssi}")
-                        val sev = if (result.status == RangingResult.STATUS_SUCCESS) LogSeverity.Info else LogSeverity.Error
-                        uiLog("[RTT] Aware result: $statusName dist=${result.distanceMm}mm rssi=${result.rssi}", sev)
                         val success = result.status == RangingResult.STATUS_SUCCESS
+                        val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
+                        val rssiLog = if (success) "${result.rssi}" else "n/a"
+                        Log.d(TAG, "rangeAwarePeer result: status=$statusName(${result.status}) distanceMm=$distanceLog rssi=$rssiLog")
+                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
+                        uiLog("[RTT] Aware result: $statusName dist=$distanceLog rssi=$rssiLog", sev)
                         cont.resume(
                             MeasurementResult(
                                 timestampMillis = System.currentTimeMillis(),
@@ -228,10 +230,12 @@ class AndroidRttManager @Inject constructor(
                             return
                         }
                         val statusName = statusCodeName(result.status)
-                        Log.d(TAG, "range result: status=$statusName(${result.status}) distanceMm=${result.distanceMm} rssi=${result.rssi}")
-                        val sev = if (result.status == RangingResult.STATUS_SUCCESS) LogSeverity.Info else LogSeverity.Error
-                        uiLog("[RTT] AP result: $statusName dist=${result.distanceMm}mm rssi=${result.rssi}", sev)
                         val success = result.status == RangingResult.STATUS_SUCCESS
+                        val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
+                        val rssiLog = if (success) "${result.rssi}" else "n/a"
+                        Log.d(TAG, "range result: status=$statusName(${result.status}) distanceMm=$distanceLog rssi=$rssiLog")
+                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
+                        uiLog("[RTT] AP result: $statusName dist=$distanceLog rssi=$rssiLog", sev)
                         cont.resume(
                             MeasurementResult(
                                 timestampMillis = System.currentTimeMillis(),
