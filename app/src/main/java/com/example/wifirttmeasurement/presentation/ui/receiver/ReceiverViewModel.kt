@@ -15,6 +15,7 @@ import com.example.wifirttmeasurement.domain.usecase.ObserveReceiverStateUseCase
 import com.example.wifirttmeasurement.domain.usecase.ScanPublishersUseCase
 import com.example.wifirttmeasurement.domain.usecase.StopMeasurementSessionUseCase
 import com.example.wifirttmeasurement.domain.usecase.TogglePublisherSelectionUseCase
+import com.example.wifirttmeasurement.domain.repository.ReceiverRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ class ReceiverViewModel @Inject constructor(
     private val measureAllPublishersUseCase: MeasureAllPublishersUseCase,
     private val stopMeasurementSessionUseCase: StopMeasurementSessionUseCase,
     private val exportMeasurementsCsvUseCase: ExportMeasurementsCsvUseCase,
+    private val receiverRepository: ReceiverRepository,
     val wifiAwareDiscoveryManager: WifiAwareDiscoveryManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(ReceiverUiState())
@@ -95,11 +97,17 @@ class ReceiverViewModel @Inject constructor(
     }
 
     fun measureSelected() {
-        runReceiverAction { measureSelectedPublishersUseCase() }
+        runReceiverAction {
+            receiverRepository.syncPublishers(_uiState.value.publishers)
+            measureSelectedPublishersUseCase()
+        }
     }
 
     fun measureAll() {
-        runReceiverAction { measureAllPublishersUseCase() }
+        runReceiverAction {
+            receiverRepository.syncPublishers(_uiState.value.publishers)
+            measureAllPublishersUseCase()
+        }
     }
 
     fun stop() {

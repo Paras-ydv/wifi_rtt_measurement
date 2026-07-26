@@ -8,6 +8,8 @@ interface ReceiverRepository {
 
     suspend fun scanPublishers()
 
+    suspend fun syncPublishers(publishers: List<com.example.wifirttmeasurement.domain.model.PublisherDevice>)
+
     suspend fun togglePublisherSelection(publisherId: String)
 
     suspend fun measureSelected()

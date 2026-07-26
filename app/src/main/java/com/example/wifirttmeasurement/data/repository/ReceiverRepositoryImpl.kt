@@ -55,6 +55,16 @@ class ReceiverRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun syncPublishers(publishers: List<PublisherDevice>) {
+        _receiverState.update { current ->
+            val currentById = current.publishers.associateBy { it.id }
+            val synced = publishers.map { p ->
+                p.copy(isSelected = currentById[p.id]?.isSelected ?: p.isSelected)
+            }
+            current.copy(publishers = synced)
+        }
+    }
+
     override suspend fun togglePublisherSelection(publisherId: String) {
         _receiverState.update { currentState ->
             currentState.copy(
