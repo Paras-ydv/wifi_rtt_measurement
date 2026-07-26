@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 
 @Singleton
 class ReceiverRepositoryImpl @Inject constructor(
@@ -112,66 +114,62 @@ class ReceiverRepositoryImpl @Inject constructor(
         }
 
         val roundNumber = _receiverState.value.currentRoundNumber + 1
-        _receiverState.update {
-            it.copy(
-                isMeasuring = true,
-                currentRoundNumber = roundNumber,
-            )
-        }
+        _receiverState.update { it.copy(isMeasuring = true, currentRoundNumber = roundNumber) }
         logRepository.addLog("Measurement Started")
 
-        publishers.forEach { publisher ->
-            if (!_receiverState.value.isMeasuring) return@forEach
+        withContext(Dispatchers.IO) {
+            publishers.forEach { publisher ->
+                if (!_receiverState.value.isMeasuring) return@forEach
 
-            val measurementNumber = _receiverState.value.measurements.size + 1L
-            val result = rttMeasurementEngine.measurePublisher(
-                publisher = publisher,
-                roundNumber = roundNumber,
-                measurementNumber = measurementNumber,
-            )
+                val measurementNumber = _receiverState.value.measurements.size + 1L
+                val result = rttMeasurementEngine.measurePublisher(
+                    publisher = publisher,
+                    roundNumber = roundNumber,
+                    measurementNumber = measurementNumber,
+                )
 
-            _receiverState.update { currentState ->
-                val filteredResult = result.distanceMeters?.let { raw ->
-                    val window = distanceWindows.getOrPut(publisher.id) { ArrayDeque(MedianWindowSize) }
-                    if (window.size >= MedianWindowSize) window.removeFirst()
-                    window.addLast(raw)
-                    val median = window.sorted()[window.size / 2]
-                    result.copy(distanceMeters = median)
-                } ?: result
-                val updatedPublishers = currentState.publishers.map { existingPublisher ->
-                    if (existingPublisher.id == publisher.id) {
-                        existingPublisher.copy(
-                            connectionStatus = if (result.status == MeasurementStatus.Success) {
-                                ConnectionStatus.Connected
-                            } else {
-                                ConnectionStatus.Unreachable
-                            },
-                            lastMeasuredDistanceMeters = filteredResult.distanceMeters,
-                            lastRssiDbm = result.rssiDbm,
-                            lastMeasurementTimestampMillis = result.timestampMillis,
-                        )
-                    } else {
-                        existingPublisher
+                _receiverState.update { currentState ->
+                    val filteredResult = result.distanceMeters?.let { raw ->
+                        val window = distanceWindows.getOrPut(publisher.id) { ArrayDeque(MedianWindowSize) }
+                        if (window.size >= MedianWindowSize) window.removeFirst()
+                        window.addLast(raw)
+                        val median = window.sorted()[window.size / 2]
+                        result.copy(distanceMeters = median)
+                    } ?: result
+                    val updatedPublishers = currentState.publishers.map { existingPublisher ->
+                        if (existingPublisher.id == publisher.id) {
+                            existingPublisher.copy(
+                                connectionStatus = if (result.status == MeasurementStatus.Success) {
+                                    ConnectionStatus.Connected
+                                } else {
+                                    ConnectionStatus.Unreachable
+                                },
+                                lastMeasuredDistanceMeters = filteredResult.distanceMeters,
+                                lastRssiDbm = result.rssiDbm,
+                                lastMeasurementTimestampMillis = result.timestampMillis,
+                            )
+                        } else {
+                            existingPublisher
+                        }
                     }
-                }
-
-                currentState.copy(
-                    publishers = updatedPublishers,
-                    measurements = (listOf(filteredResult) + currentState.measurements).take(MaxMeasurements),
-                    dashboardStats = DashboardStatsCalculator.calculate(
+                    currentState.copy(
                         publishers = updatedPublishers,
                         measurements = (listOf(filteredResult) + currentState.measurements).take(MaxMeasurements),
-                    ),
-                )
-            }
+                        dashboardStats = DashboardStatsCalculator.calculate(
+                            publishers = updatedPublishers,
+                            measurements = (listOf(filteredResult) + currentState.measurements).take(MaxMeasurements),
+                        ),
+                    )
+                }
 
-            if (result.status == MeasurementStatus.Success) {
-                logRepository.addLog("Measurement Completed")
-            } else {
-                logRepository.addLog(
-                    message = "Measurement Failed for ${publisher.name}: ${result.failureReason}",
-                    severity = LogSeverity.Warning,
-                )
+                if (result.status == MeasurementStatus.Success) {
+                    logRepository.addLog("Measurement Completed")
+                } else {
+                    logRepository.addLog(
+                        message = "Measurement Failed for ${publisher.name}: ${result.failureReason}",
+                        severity = LogSeverity.Warning,
+                    )
+                }
             }
         }
 

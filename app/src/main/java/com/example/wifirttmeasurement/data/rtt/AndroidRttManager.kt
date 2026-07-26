@@ -39,13 +39,9 @@ class AndroidRttManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val logRepository: LogRepository,
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val mainExecutor = android.os.Handler(Looper.getMainLooper()).let { h ->
-        android.os.Handler(Looper.getMainLooper()).run {
-            java.util.concurrent.Executor { r -> this.post(r) }
-        }
-    }
+    private val rttExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val wifiManager: WifiManager? =
         context.getSystemService(WifiManager::class.java)
 
@@ -145,7 +141,7 @@ class AndroidRttManager @Inject constructor(
             Log.d(TAG, "rangeAwarePeer() request built: burstSize=${RangingRequest.getMaxRttBurstSize()}")
             rttManager.startRanging(
                 request,
-                mainExecutor,
+                rttExecutor,
                 object : RangingResultCallback() {
                     override fun onRangingResults(results: List<RangingResult>) {
                         val result = results.firstOrNull()
@@ -237,7 +233,7 @@ class AndroidRttManager @Inject constructor(
 
             rttManager.startRanging(
                 request,
-                mainExecutor,
+                rttExecutor,
                 object : RangingResultCallback() {
                     override fun onRangingResults(results: List<RangingResult>) {
                         Log.d(TAG, "range onRangingResults: count=${results.size}")
