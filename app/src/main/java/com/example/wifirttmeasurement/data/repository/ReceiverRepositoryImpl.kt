@@ -25,6 +25,9 @@ class ReceiverRepositoryImpl @Inject constructor(
     private val _receiverState = MutableStateFlow(ReceiverState.Initial)
     override val receiverState: StateFlow<ReceiverState> = _receiverState.asStateFlow()
 
+    // Sliding window of raw distances per publisher for median filtering
+    private val distanceWindows = mutableMapOf<String, ArrayDeque<Double>>()
+
     override suspend fun scanPublishers() {
         logRepository.addLog("Publisher scan started")
         _receiverState.update { it.copy(isScanning = true) }
@@ -128,7 +131,13 @@ class ReceiverRepositoryImpl @Inject constructor(
             )
 
             _receiverState.update { currentState ->
-                val measurements = (listOf(result) + currentState.measurements).take(MaxMeasurements)
+                val filteredResult = result.distanceMeters?.let { raw ->
+                    val window = distanceWindows.getOrPut(publisher.id) { ArrayDeque(MedianWindowSize) }
+                    if (window.size >= MedianWindowSize) window.removeFirst()
+                    window.addLast(raw)
+                    val median = window.sorted()[window.size / 2]
+                    result.copy(distanceMeters = median)
+                } ?: result
                 val updatedPublishers = currentState.publishers.map { existingPublisher ->
                     if (existingPublisher.id == publisher.id) {
                         existingPublisher.copy(
@@ -137,7 +146,7 @@ class ReceiverRepositoryImpl @Inject constructor(
                             } else {
                                 ConnectionStatus.Unreachable
                             },
-                            lastMeasuredDistanceMeters = result.distanceMeters,
+                            lastMeasuredDistanceMeters = filteredResult.distanceMeters,
                             lastRssiDbm = result.rssiDbm,
                             lastMeasurementTimestampMillis = result.timestampMillis,
                         )
@@ -148,10 +157,10 @@ class ReceiverRepositoryImpl @Inject constructor(
 
                 currentState.copy(
                     publishers = updatedPublishers,
-                    measurements = measurements,
+                    measurements = (listOf(filteredResult) + currentState.measurements).take(MaxMeasurements),
                     dashboardStats = DashboardStatsCalculator.calculate(
                         publishers = updatedPublishers,
-                        measurements = measurements,
+                        measurements = (listOf(filteredResult) + currentState.measurements).take(MaxMeasurements),
                     ),
                 )
             }
@@ -182,3 +191,4 @@ class ReceiverRepositoryImpl @Inject constructor(
 }
 
 private const val MaxMeasurements = 1_000
+private const val MedianWindowSize = 5

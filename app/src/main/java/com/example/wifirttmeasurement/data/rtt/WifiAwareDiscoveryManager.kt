@@ -75,6 +75,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
     private var publishActive = false
     private var subscribeActive = false
     private var availabilityReceiver: BroadcastReceiver? = null
+    private var nextMessageId = 1
+    private val pendingIdRetries = mutableMapOf<Int, Pair<PeerHandle, Int>>() // msgId → (handle, retryCount)
 
     // -------------------------------------------------------------------------
     // Public API
@@ -159,6 +161,7 @@ class WifiAwareDiscoveryManager @Inject constructor(
             .setServiceName(SERVICE_NAME)
             .setPublishType(PublishConfig.PUBLISH_TYPE_UNSOLICITED)
             .setRangingEnabled(true)
+            .setTerminateNotificationEnabled(false)
             .build()
 
         session.publish(config, object : DiscoverySessionCallback() {
@@ -174,21 +177,25 @@ class WifiAwareDiscoveryManager @Inject constructor(
                 val text = message.toString(Charsets.UTF_8)
                 log("onMessageReceived(publish) handle=${peerHandle.hashCode()} text='$text'")
                 if (text.startsWith(DEVICE_ID_PREFIX)) {
-                    // Reply with our own ID so the subscriber can name the peer
                     val reply = "$DEVICE_ID_PREFIX${deviceId()}"
-                    publishSession?.sendMessage(peerHandle, MESSAGE_ID, reply.toByteArray(Charsets.UTF_8))
-                    log("onMessageReceived(publish) replied with id='$reply' to handle=${peerHandle.hashCode()}")
+                    sendWithRetry(peerHandle, reply, isPublishSide = true)
                 }
-                // Do NOT create or update any peer entry here — publish-side handles are not valid for RTT
             }
 
-            override fun onMessageSendSucceeded(messageId: Int) { log("onMessageSendSucceeded(publish) id=$messageId") }
-            override fun onMessageSendFailed(messageId: Int) { log("onMessageSendFailed(publish) id=$messageId", LogSeverity.Warning) }
+            override fun onMessageSendSucceeded(messageId: Int) {
+                log("onMessageSendSucceeded(publish) id=$messageId")
+                pendingIdRetries.remove(messageId)
+            }
+            override fun onMessageSendFailed(messageId: Int) {
+                log("onMessageSendFailed(publish) id=$messageId — retrying", LogSeverity.Warning)
+                retryMessage(messageId, isPublishSide = true)
+            }
 
             override fun onSessionTerminated() {
                 log("onSessionTerminated(publish) — restarting", LogSeverity.Warning)
                 publishSession = null; publishActive = false
-                awareSession?.let { startPublish(it) }
+                if (hasRequiredPermissions()) awareSession?.let { startPublish(it) }
+                else log("onSessionTerminated(publish) — skipping restart, permissions missing", LogSeverity.Warning)
             }
 
             // Publish side should not discover services — log if it happens unexpectedly
@@ -207,8 +214,9 @@ class WifiAwareDiscoveryManager @Inject constructor(
         log("startSubscribe() → service='$SERVICE_NAME'")
         val config = SubscribeConfig.Builder()
             .setServiceName(SERVICE_NAME)
-            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_PASSIVE)
+            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_ACTIVE)
             .setMaxDistanceMm(100_000)
+            .setTerminateNotificationEnabled(false)
             .build()
 
         session.subscribe(config, object : DiscoverySessionCallback() {
@@ -224,9 +232,7 @@ class WifiAwareDiscoveryManager @Inject constructor(
                 val handleId = peerHandle.hashCode()
                 log("onServiceDiscovered(subscribe) handle=$handleId — storing peer, sending ID")
                 upsertPeerByHandle(peerHandle, newPeerId = null)
-                val idMessage = "$DEVICE_ID_PREFIX${deviceId()}"
-                subscribeSession?.sendMessage(peerHandle, MESSAGE_ID, idMessage.toByteArray(Charsets.UTF_8))
-                log("sendMessage() id='$idMessage' to handle=$handleId")
+                sendWithRetry(peerHandle, "$DEVICE_ID_PREFIX${deviceId()}", isPublishSide = false)
             }
 
             // Step 2: publisher replied with its device ID. Update the EXISTING peer (same handle).
@@ -246,8 +252,14 @@ class WifiAwareDiscoveryManager @Inject constructor(
                 markPeerInactive(peerHandle)
             }
 
-            override fun onMessageSendSucceeded(messageId: Int) { log("onMessageSendSucceeded(subscribe) id=$messageId") }
-            override fun onMessageSendFailed(messageId: Int) { log("onMessageSendFailed(subscribe) id=$messageId — ID exchange failed", LogSeverity.Warning) }
+            override fun onMessageSendSucceeded(messageId: Int) {
+                log("onMessageSendSucceeded(subscribe) id=$messageId")
+                pendingIdRetries.remove(messageId)
+            }
+            override fun onMessageSendFailed(messageId: Int) {
+                log("onMessageSendFailed(subscribe) id=$messageId — retrying", LogSeverity.Warning)
+                retryMessage(messageId, isPublishSide = false)
+            }
 
             override fun onSessionTerminated() {
                 log("onSessionTerminated(subscribe) — restarting", LogSeverity.Warning)
@@ -255,6 +267,36 @@ class WifiAwareDiscoveryManager @Inject constructor(
                 awareSession?.let { startSubscribe(it) }
             }
         }, mainHandler)
+    }
+
+    // -------------------------------------------------------------------------
+    // Message send with retry
+    // -------------------------------------------------------------------------
+
+    private fun sendWithRetry(peerHandle: PeerHandle, text: String, isPublishSide: Boolean) {
+        val msgId = nextMessageId++
+        val session = if (isPublishSide) publishSession else subscribeSession
+        session?.sendMessage(peerHandle, msgId, text.toByteArray(Charsets.UTF_8))
+        pendingIdRetries[msgId] = Pair(peerHandle, 0)
+        log("sendWithRetry: msgId=$msgId handle=${peerHandle.hashCode()} publish=$isPublishSide text='$text'")
+    }
+
+    private fun retryMessage(messageId: Int, isPublishSide: Boolean) {
+        val (peerHandle, retryCount) = pendingIdRetries[messageId] ?: return
+        if (retryCount >= MAX_MSG_RETRIES) {
+            log("retryMessage: msgId=$messageId exceeded max retries — giving up", LogSeverity.Warning)
+            pendingIdRetries.remove(messageId)
+            return
+        }
+        val newMsgId = nextMessageId++
+        val session = if (isPublishSide) publishSession else subscribeSession
+        // Re-read the text from the pending entry — we stored it as the handle's pending text
+        // Re-send by re-triggering discovery: just re-send our device ID to the same handle
+        val text = "$DEVICE_ID_PREFIX${deviceId()}"
+        session?.sendMessage(peerHandle, newMsgId, text.toByteArray(Charsets.UTF_8))
+        pendingIdRetries.remove(messageId)
+        pendingIdRetries[newMsgId] = Pair(peerHandle, retryCount + 1)
+        log("retryMessage: old=$messageId new=$newMsgId retry=${retryCount + 1}")
     }
 
     // -------------------------------------------------------------------------
@@ -270,29 +312,37 @@ class WifiAwareDiscoveryManager @Inject constructor(
         val now = System.currentTimeMillis()
         val handleId = peerHandle.hashCode()
         _state.update { current ->
-            val existing = current.peers.indexOfFirst { it.peerHandle.hashCode() == handleId }
-            val updated = if (existing >= 0) {
-                current.peers.toMutableList().also { list ->
-                    val old = list[existing]
-                    list[existing] = old.copy(
-                        peerHandle = peerHandle,
-                        peerId = newPeerId ?: old.peerId,
-                        lastSeenMillis = now,
-                        isActive = true,
-                    )
-                    log("upsertPeerByHandle: updated handle=$handleId peerId=${list[existing].peerId}")
+            val existingIdx = current.peers.indexOfFirst { it.peerHandle.hashCode() == handleId }
+            val peers = current.peers.toMutableList()
+            if (existingIdx >= 0) {
+                val old = peers[existingIdx]
+                val resolvedId = newPeerId ?: old.peerId
+                // If the real ID is now known, remove any stale placeholder with the same ID
+                if (newPeerId != null) {
+                    peers.removeAll { it.peerHandle.hashCode() != handleId && it.peerId == newPeerId }
                 }
-            } else {
-                val peerId = newPeerId ?: "peer-$handleId"
-                log("upsertPeerByHandle: new peer handle=$handleId peerId=$peerId")
-                current.peers + AwarePeer(
+                peers[peers.indexOfFirst { it.peerHandle.hashCode() == handleId }] = old.copy(
                     peerHandle = peerHandle,
-                    peerId = peerId,
-                    discoveredAtMillis = now,
+                    peerId = resolvedId,
                     lastSeenMillis = now,
+                    isActive = true,
                 )
+                log("upsertPeerByHandle: updated handle=$handleId peerId=$resolvedId")
+            } else {
+                // Before adding, check if a peer with this real ID already exists (different handle)
+                val realId = newPeerId ?: "peer-$handleId"
+                val duplicateIdx = if (newPeerId != null) peers.indexOfFirst { it.peerId == newPeerId } else -1
+                if (duplicateIdx >= 0) {
+                    // Replace the stale entry with the new handle
+                    val old = peers[duplicateIdx]
+                    peers[duplicateIdx] = old.copy(peerHandle = peerHandle, lastSeenMillis = now, isActive = true)
+                    log("upsertPeerByHandle: replaced stale handle for peerId=$realId with handle=$handleId")
+                } else {
+                    log("upsertPeerByHandle: new peer handle=$handleId peerId=$realId")
+                    peers += AwarePeer(peerHandle = peerHandle, peerId = realId, discoveredAtMillis = now, lastSeenMillis = now)
+                }
             }
-            current.copy(peers = updated)
+            current.copy(peers = peers)
         }
     }
 
@@ -383,8 +433,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
 
     companion object {
         const val SERVICE_NAME = "wifi_rtt_measurement"
-        private const val MESSAGE_ID = 1
         private const val DEVICE_ID_PREFIX = "id:"
         private const val RETRY_DELAY_MS = 3_000L
+        private const val MAX_MSG_RETRIES = 3
     }
 }

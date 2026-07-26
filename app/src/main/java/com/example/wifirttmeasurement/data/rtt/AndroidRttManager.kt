@@ -140,9 +140,9 @@ class AndroidRttManager @Inject constructor(
         return suspendCancellableCoroutine { cont ->
             val request = RangingRequest.Builder()
                 .addWifiAwarePeer(peerHandle)
-                .setRttBurstSize(4)
+                .setRttBurstSize(RangingRequest.getMaxRttBurstSize())
                 .build()
-            Log.d(TAG, "rangeAwarePeer() request built: burstSize=4")
+            Log.d(TAG, "rangeAwarePeer() request built: burstSize=${RangingRequest.getMaxRttBurstSize()}")
             rttManager.startRanging(
                 request,
                 mainExecutor,
