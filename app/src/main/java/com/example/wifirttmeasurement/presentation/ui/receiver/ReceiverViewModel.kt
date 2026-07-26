@@ -3,7 +3,6 @@ package com.example.wifirttmeasurement.presentation.ui.receiver
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.wifirttmeasurement.data.rtt.WifiAwareDiscoveryManager
-import com.example.wifirttmeasurement.domain.model.AwareDiscoveryState
 import com.example.wifirttmeasurement.domain.model.ConnectionStatus
 import com.example.wifirttmeasurement.domain.model.PublisherDevice
 import com.example.wifirttmeasurement.domain.model.PublisherStatus
@@ -47,14 +46,26 @@ class ReceiverViewModel @Inject constructor(
                 observeLogsUseCase(),
                 wifiAwareDiscoveryManager.state,
             ) { receiverState, logs, awareState ->
-                // Reactively merge newly discovered Aware peers into the publisher list.
-                // This fixes the race where scanPublishers() read activePeers before
-                // discovery completed. Now whenever a new peer appears in awareState,
-                // the UI updates automatically without re-running the Wi-Fi scan.
-                val mergedPublishers = mergeAwarePeers(
-                    scannedPublishers = receiverState.publishers,
-                    awareState = awareState,
-                )
+                // Merge Aware peers into the AP-scanned list. Dedup against the full
+                // current UI list (not just receiverState.publishers) to prevent the
+                // same peer being appended on every combine() re-emission.
+                val existingIds = (_uiState.value.publishers.map { it.id } +
+                    receiverState.publishers.map { it.id }).toSet()
+                val newAwarePeers = awareState.activePeers
+                    .filter { it.peerId !in existingIds }
+                    .map { peer ->
+                        PublisherDevice(
+                            id = peer.peerId,
+                            name = peer.peerId,
+                            connectionStatus = ConnectionStatus.Disconnected,
+                            status = PublisherStatus.Waiting,
+                            lastMeasuredDistanceMeters = null,
+                            lastRssiDbm = null,
+                            lastMeasurementTimestampMillis = null,
+                            awarePeerId = peer.peerId,
+                        )
+                    }
+                val mergedPublishers = receiverState.publishers + newAwarePeers
                 ReceiverUiState.from(
                     receiverState = receiverState.copy(publishers = mergedPublishers),
                     logs = logs,
@@ -67,29 +78,6 @@ class ReceiverViewModel @Inject constructor(
                 _uiState.value = nextState
             }
         }
-    }
-
-    /** Merges active Aware peers into the publisher list without re-scanning. */
-    private fun mergeAwarePeers(
-        scannedPublishers: List<PublisherDevice>,
-        awareState: AwareDiscoveryState,
-    ): List<PublisherDevice> {
-        val existingIds = scannedPublishers.map { it.id }.toSet()
-        val newAwarePeers = awareState.activePeers
-            .filter { it.peerId !in existingIds }
-            .map { peer ->
-                PublisherDevice(
-                    id = peer.peerId,
-                    name = peer.peerId,
-                    connectionStatus = ConnectionStatus.Disconnected,
-                    status = PublisherStatus.Waiting,
-                    lastMeasuredDistanceMeters = null,
-                    lastRssiDbm = null,
-                    lastMeasurementTimestampMillis = null,
-                    awarePeerId = peer.peerId,
-                )
-            }
-        return scannedPublishers + newAwarePeers
     }
 
     fun scanPublishers() {
