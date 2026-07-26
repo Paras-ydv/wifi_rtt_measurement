@@ -157,7 +157,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
         log("startPublish() → service='$SERVICE_NAME'")
         val config = PublishConfig.Builder()
             .setServiceName(SERVICE_NAME)
-            .setPublishType(PublishConfig.PUBLISH_TYPE_SOLICITED)
+            .setPublishType(PublishConfig.PUBLISH_TYPE_UNSOLICITED)
+            .setRangingEnabled(true)
             .build()
 
         session.publish(config, object : DiscoverySessionCallback() {
@@ -206,7 +207,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
         log("startSubscribe() → service='$SERVICE_NAME'")
         val config = SubscribeConfig.Builder()
             .setServiceName(SERVICE_NAME)
-            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_ACTIVE)
+            .setSubscribeType(SubscribeConfig.SUBSCRIBE_TYPE_PASSIVE)
+            .setMaxDistanceMm(100_000)
             .build()
 
         session.subscribe(config, object : DiscoverySessionCallback() {
