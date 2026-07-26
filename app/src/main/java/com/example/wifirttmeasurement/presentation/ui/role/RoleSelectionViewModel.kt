@@ -35,19 +35,6 @@ class RoleSelectionViewModel @Inject constructor(
     }
 
     fun onRoleSelected(role: AppRole) {
-        val state = _uiState.value
-        val isRoleAllowed = when (role) {
-            AppRole.Receiver -> state.canChooseReceiver
-            AppRole.Publisher -> state.canChoosePublisher
-        }
-
-        if (!isRoleAllowed) {
-            _uiState.update {
-                it.copy(errorMessage = "This device is not currently available for ${role.name} mode.")
-            }
-            return
-        }
-
         viewModelScope.launch {
             runCatching {
                 saveSelectedRoleUseCase(role)

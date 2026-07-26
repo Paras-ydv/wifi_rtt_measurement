@@ -10,8 +10,8 @@ data class RoleSelectionUiState(
     val errorMessage: String? = null,
 ) {
     val canChooseReceiver: Boolean
-        get() = !isLoading && capability.canActAsReceiver
+        get() = !isLoading
 
     val canChoosePublisher: Boolean
-        get() = !isLoading && capability.canActAsPublisher
+        get() = !isLoading
 }
