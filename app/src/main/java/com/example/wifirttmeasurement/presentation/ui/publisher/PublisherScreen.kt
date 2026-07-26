@@ -44,6 +44,8 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.wifirttmeasurement.domain.model.AwareDiscoveryState
+import com.example.wifirttmeasurement.domain.model.AwareSessionStatus
 import com.example.wifirttmeasurement.domain.model.ConnectionStatus
 import com.example.wifirttmeasurement.domain.model.LogSeverity
 import com.example.wifirttmeasurement.domain.model.MeasurementLog
@@ -61,6 +63,9 @@ fun PublisherScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Start Wi-Fi Aware immediately so the publisher is discoverable before the user taps anything
+    LaunchedEffect(Unit) { viewModel.startAwareDiscovery() }
 
     LaunchedEffect(uiState.errorMessage) {
         val message = uiState.errorMessage ?: return@LaunchedEffect
@@ -121,6 +126,7 @@ private fun PublisherContent(
                             ) {
                                 DeviceInformationCard(uiState)
                                 StatusCard(uiState)
+                                AwareDiscoveryCard(uiState.awareDiscoveryState)
                             }
                             Column(
                                 modifier = Modifier.weight(1f),
@@ -138,6 +144,7 @@ private fun PublisherContent(
                     } else {
                         DeviceInformationCard(uiState)
                         StatusCard(uiState)
+                        AwareDiscoveryCard(uiState.awareDiscoveryState)
                         MeasurementCounterCard(uiState)
                         PublisherControls(
                             uiState = uiState,
@@ -460,7 +467,76 @@ private fun Long?.formatTimestamp(): String {
     return this?.let { DateFormat.getDateTimeInstance().format(Date(it)) } ?: "Never"
 }
 
-@Preview(showBackground = true, widthDp = 420)
+@Composable
+private fun AwareDiscoveryCard(aware: AwareDiscoveryState) {
+    OutlinedCard(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Wi-Fi Aware",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                val (color, label) = when (aware.status) {
+                    AwareSessionStatus.Active -> RttGreen to "Active"
+                    AwareSessionStatus.Attaching, AwareSessionStatus.Attached,
+                    AwareSessionStatus.Publishing, AwareSessionStatus.Subscribing -> RttAmber to "Starting"
+                    AwareSessionStatus.Error -> RttRed to "Error"
+                    AwareSessionStatus.Unavailable -> RttRed to "Unavailable"
+                    AwareSessionStatus.Idle -> MaterialTheme.colorScheme.onSurfaceVariant to "Idle"
+                }
+                Surface(
+                    color = color.copy(alpha = 0.12f),
+                    contentColor = color,
+                    shape = RoundedCornerShape(50),
+                ) {
+                    Text(
+                        text = label,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            if (aware.errorMessage != null) {
+                Text(text = aware.errorMessage, style = MaterialTheme.typography.bodySmall, color = RttAmber)
+            }
+            val statusText = when {
+                aware.activePeers.isNotEmpty() -> "${aware.activePeers.size} receiver(s) connected"
+                aware.status == AwareSessionStatus.Active -> "Advertising — waiting for receivers"
+                aware.status == AwareSessionStatus.Idle -> "Not started"
+                aware.status == AwareSessionStatus.Unavailable -> "Wi-Fi Aware not available on this device"
+                else -> "Starting..."
+            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (aware.activePeers.isNotEmpty()) RttGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            aware.activePeers.forEach { peer ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(RttGreen))
+                    Text(text = peer.peerId, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+    }
+}
+
+
 @Composable
 private fun PublisherContentPreview() {
     PublisherContent(

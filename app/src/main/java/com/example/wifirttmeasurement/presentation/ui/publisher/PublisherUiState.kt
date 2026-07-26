@@ -1,5 +1,6 @@
 package com.example.wifirttmeasurement.presentation.ui.publisher
 
+import com.example.wifirttmeasurement.domain.model.AwareDiscoveryState
 import com.example.wifirttmeasurement.domain.model.ConnectionStatus
 import com.example.wifirttmeasurement.domain.model.MeasurementLog
 import com.example.wifirttmeasurement.domain.model.PublisherState
@@ -17,11 +18,13 @@ data class PublisherUiState(
     val logs: List<MeasurementLog> = emptyList(),
     val isBusy: Boolean = false,
     val errorMessage: String? = null,
+    val awareDiscoveryState: AwareDiscoveryState = AwareDiscoveryState(),
 ) {
     companion object {
         fun from(
             publisherState: PublisherState,
             logs: List<MeasurementLog>,
+            awareDiscoveryState: AwareDiscoveryState = AwareDiscoveryState(),
             isBusy: Boolean = false,
             errorMessage: String? = null,
         ): PublisherUiState {
@@ -37,6 +40,7 @@ data class PublisherUiState(
                 logs = logs,
                 isBusy = isBusy,
                 errorMessage = errorMessage,
+                awareDiscoveryState = awareDiscoveryState,
             )
         }
     }

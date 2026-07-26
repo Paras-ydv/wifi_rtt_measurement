@@ -3,7 +3,7 @@ package com.example.wifirttmeasurement.presentation.ui.publisher
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.wifirttmeasurement.data.rtt.WifiAwareDiscoveryManager
-import com.example.wifirttmeasurement.domain.model.PublisherState
+import com.example.wifirttmeasurement.domain.repository.PublisherRepository
 import com.example.wifirttmeasurement.domain.usecase.ObserveLogsUseCase
 import com.example.wifirttmeasurement.domain.usecase.ObservePublisherStatusUseCase
 import com.example.wifirttmeasurement.domain.usecase.RefreshPublisherStatusUseCase
@@ -25,20 +25,28 @@ class PublisherViewModel @Inject constructor(
     private val startPublishingUseCase: StartPublishingUseCase,
     private val stopPublishingUseCase: StopPublishingUseCase,
     private val refreshPublisherStatusUseCase: RefreshPublisherStatusUseCase,
+    private val publisherRepository: PublisherRepository,
     private val wifiAwareDiscoveryManager: WifiAwareDiscoveryManager,
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(PublisherUiState())
     val uiState: StateFlow<PublisherUiState> = _uiState.asStateFlow()
 
     init {
+        // When the receiver discovers us and sends its ID, record the ranging request
+        wifiAwareDiscoveryManager.onRangingRequestReceived = {
+            viewModelScope.launch { publisherRepository.recordRttRequestReceived() }
+        }
+
         viewModelScope.launch {
             combine(
                 observePublisherStatusUseCase(),
                 observeLogsUseCase(),
-            ) { publisherState, logs ->
+                wifiAwareDiscoveryManager.state,
+            ) { publisherState, logs, awareState ->
                 PublisherUiState.from(
                     publisherState = publisherState,
                     logs = logs,
+                    awareDiscoveryState = awareState,
                     isBusy = _uiState.value.isBusy,
                     errorMessage = _uiState.value.errorMessage,
                 )
@@ -48,6 +56,10 @@ class PublisherViewModel @Inject constructor(
         }
 
         refreshStatus()
+    }
+
+    fun startAwareDiscovery() {
+        wifiAwareDiscoveryManager.start()
     }
 
     fun startPublishing() {

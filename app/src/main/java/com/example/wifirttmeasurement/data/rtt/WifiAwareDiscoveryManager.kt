@@ -76,6 +76,9 @@ class WifiAwareDiscoveryManager @Inject constructor(
     private var subscribeActive = false
     private var availabilityReceiver: BroadcastReceiver? = null
 
+    /** Called on the main thread whenever a receiver sends us its device ID (i.e. it found us and is about to range). */
+    var onRangingRequestReceived: (() -> Unit)? = null
+
     // -------------------------------------------------------------------------
     // Public API
     // -------------------------------------------------------------------------
@@ -181,6 +184,8 @@ class WifiAwareDiscoveryManager @Inject constructor(
                     val reply = "$DEVICE_ID_PREFIX${deviceId()}"
                     publishSession?.sendMessage(peerHandle, MESSAGE_ID, reply.toByteArray(Charsets.UTF_8))
                     log("onMessageReceived(publish) replied with id='$reply' to handle=${peerHandle.hashCode()}")
+                    // Notify publisher that a receiver has found us and is about to range
+                    onRangingRequestReceived?.invoke()
                 }
                 // Do NOT create or update any peer entry here — publish-side handles are not valid for RTT
             }
