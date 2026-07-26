@@ -20,17 +20,25 @@ import com.example.wifirttmeasurement.domain.model.MeasurementStatus
 import com.example.wifirttmeasurement.domain.model.PublisherDevice
 import com.example.wifirttmeasurement.domain.model.RttFailureReason
 import android.util.Log
+import com.example.wifirttmeasurement.domain.model.LogSeverity
+import com.example.wifirttmeasurement.domain.repository.LogRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.concurrent.Executor
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 
 @Singleton
 class AndroidRttManager @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val logRepository: LogRepository,
 ) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val wifiManager: WifiManager? =
         context.getSystemService(WifiManager::class.java)
 
@@ -113,6 +121,7 @@ class AndroidRttManager @Inject constructor(
             )
         }
         Log.d(TAG, "rangeAwarePeer() → startRanging handle=${peerHandle.hashCode()} publisher=${publisher.id}")
+        uiLog("[RTT] startRanging → Aware peer handle=${peerHandle.hashCode()} id=${publisher.id}")
         return suspendCancellableCoroutine { cont ->
             val request = RangingRequest.Builder()
                 .addWifiAwarePeer(peerHandle)
@@ -131,6 +140,8 @@ class AndroidRttManager @Inject constructor(
                         }
                         val statusName = statusCodeName(result.status)
                         Log.d(TAG, "rangeAwarePeer result: status=$statusName(${result.status}) distanceMm=${result.distanceMm} rssi=${result.rssi}")
+                        val sev = if (result.status == RangingResult.STATUS_SUCCESS) LogSeverity.Info else LogSeverity.Error
+                        uiLog("[RTT] Aware result: $statusName dist=${result.distanceMm}mm rssi=${result.rssi}", sev)
                         val success = result.status == RangingResult.STATUS_SUCCESS
                         cont.resume(
                             MeasurementResult(
@@ -150,6 +161,7 @@ class AndroidRttManager @Inject constructor(
                     override fun onRangingFailure(code: Int) {
                         val codeName = failureCodeName(code)
                         Log.e(TAG, "rangeAwarePeer onRangingFailure: code=$codeName($code)")
+                        uiLog("[RTT] Aware onRangingFailure: $codeName($code)", LogSeverity.Error)
                         cont.resume(
                             MeasurementResult(
                                 timestampMillis = System.currentTimeMillis(),
@@ -191,6 +203,7 @@ class AndroidRttManager @Inject constructor(
         }
 
         Log.d(TAG, "range() → startRanging AP bssid=${scanResult.BSSID} publisher=${publisher.id}")
+        uiLog("[RTT] startRanging → AP bssid=${scanResult.BSSID}")
         return suspendCancellableCoroutine { cont ->
             val request = RangingRequest.Builder()
                 .addAccessPoint(scanResult)
@@ -212,6 +225,8 @@ class AndroidRttManager @Inject constructor(
                         }
                         val statusName = statusCodeName(result.status)
                         Log.d(TAG, "range result: status=$statusName(${result.status}) distanceMm=${result.distanceMm} rssi=${result.rssi}")
+                        val sev = if (result.status == RangingResult.STATUS_SUCCESS) LogSeverity.Info else LogSeverity.Error
+                        uiLog("[RTT] AP result: $statusName dist=${result.distanceMm}mm rssi=${result.rssi}", sev)
                         val success = result.status == RangingResult.STATUS_SUCCESS
                         cont.resume(
                             MeasurementResult(
@@ -232,6 +247,7 @@ class AndroidRttManager @Inject constructor(
                     override fun onRangingFailure(code: Int) {
                         val codeName = failureCodeName(code)
                         Log.e(TAG, "range onRangingFailure: code=$codeName($code)")
+                        uiLog("[RTT] AP onRangingFailure: $codeName($code)", LogSeverity.Error)
                         cont.resume(
                             MeasurementResult(
                                 timestampMillis = System.currentTimeMillis(),
@@ -292,6 +308,11 @@ class AndroidRttManager @Inject constructor(
         RangingResultCallback.STATUS_CODE_FAIL -> "STATUS_CODE_FAIL"
         RangingResultCallback.STATUS_CODE_FAIL_RTT_NOT_AVAILABLE -> "STATUS_CODE_FAIL_RTT_NOT_AVAILABLE"
         else -> "STATUS_CODE_UNKNOWN"
+    }
+
+    private fun uiLog(message: String, severity: LogSeverity = LogSeverity.Info) {
+        Log.d(TAG, message)
+        scope.launch { logRepository.addLog(message, severity) }
     }
 
     companion object {
