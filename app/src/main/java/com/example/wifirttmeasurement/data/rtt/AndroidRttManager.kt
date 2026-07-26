@@ -127,30 +127,48 @@ class AndroidRttManager @Inject constructor(
                 measurementNumber = 0,
             )
         }
-        Log.d(TAG, "rangeAwarePeer() → startRanging handle=${peerHandle.hashCode()} publisher=${publisher.id}")
-        uiLog("[RTT] startRanging → Aware peer handle=${peerHandle.hashCode()} id=${publisher.id}")
+
+        // Log device + RTT availability context once per call to aid diagnosis
+        Log.d(TAG, "rangeAwarePeer() diagnostics:" +
+            " handle=${peerHandle.hashCode()}" +
+            " publisher=${publisher.id}" +
+            " rttAvailable=${rttManager.isAvailable}" +
+            " sdk=${Build.VERSION.SDK_INT}" +
+            " device=${Build.MANUFACTURER} ${Build.MODEL}")
+        uiLog("[RTT] startRanging → handle=${peerHandle.hashCode()} id=${publisher.id} rttAvail=${rttManager.isAvailable}")
+
         return suspendCancellableCoroutine { cont ->
             val request = RangingRequest.Builder()
                 .addWifiAwarePeer(peerHandle)
+                .setRttBurstSize(4)
                 .build()
+            Log.d(TAG, "rangeAwarePeer() request built: burstSize=4")
             rttManager.startRanging(
                 request,
                 mainExecutor,
                 object : RangingResultCallback() {
                     override fun onRangingResults(results: List<RangingResult>) {
-                        Log.d(TAG, "rangeAwarePeer onRangingResults: count=${results.size}")
                         val result = results.firstOrNull()
                         if (result == null) {
                             Log.w(TAG, "rangeAwarePeer: empty results list")
                             return cont.resume(unsupportedResult(publisher))
                         }
-                        val statusName = statusCodeName(result.status)
                         val success = result.status == RangingResult.STATUS_SUCCESS
+                        // Log ALL available fields — safe guards on non-SUCCESS fields
+                        Log.d(TAG, "rangeAwarePeer result:" +
+                            " status=${statusCodeName(result.status)}(${result.status})" +
+                            " distanceMm=${if (success) result.distanceMm else -1}" +
+                            " stdDevMm=${if (success) result.distanceStdDevMm else -1}" +
+                            " rssi=${if (success) result.rssi else -999}" +
+                            " numAttempted=${if (success) result.numAttemptedMeasurements else -1}" +
+                            " numSuccessful=${if (success) result.numSuccessfulMeasurements else -1}" +
+                            " peerHandle=${peerHandle.hashCode()}" +
+                            " sdk=${Build.VERSION.SDK_INT}" +
+                            " device=${Build.MODEL}")
+                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
                         val distanceLog = if (success) "${result.distanceMm}mm" else "n/a"
                         val rssiLog = if (success) "${result.rssi}" else "n/a"
-                        Log.d(TAG, "rangeAwarePeer result: status=$statusName(${result.status}) distanceMm=$distanceLog rssi=$rssiLog")
-                        val sev = if (success) LogSeverity.Info else LogSeverity.Error
-                        uiLog("[RTT] Aware result: $statusName dist=$distanceLog rssi=$rssiLog", sev)
+                        uiLog("[RTT] Aware result: ${statusCodeName(result.status)} dist=$distanceLog rssi=$rssiLog", sev)
                         cont.resume(
                             MeasurementResult(
                                 timestampMillis = System.currentTimeMillis(),
@@ -168,7 +186,7 @@ class AndroidRttManager @Inject constructor(
                     }
                     override fun onRangingFailure(code: Int) {
                         val codeName = failureCodeName(code)
-                        Log.e(TAG, "rangeAwarePeer onRangingFailure: code=$codeName($code)")
+                        Log.e(TAG, "rangeAwarePeer onRangingFailure: code=$codeName($code) device=${Build.MODEL}")
                         uiLog("[RTT] Aware onRangingFailure: $codeName($code)", LogSeverity.Error)
                         cont.resume(
                             MeasurementResult(
