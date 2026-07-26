@@ -30,7 +30,6 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -76,7 +75,6 @@ class WifiAwareDiscoveryManager @Inject constructor(
     private var publishActive = false
     private var subscribeActive = false
     private var availabilityReceiver: BroadcastReceiver? = null
-    private val peerTimeoutMillis = 30_000L
 
     // -------------------------------------------------------------------------
     // Public API
@@ -294,7 +292,6 @@ class WifiAwareDiscoveryManager @Inject constructor(
             }
             current.copy(peers = updated)
         }
-        schedulePeerTimeoutCheck()
     }
 
     private fun markPeerInactive(peerHandle: PeerHandle) {
@@ -304,18 +301,6 @@ class WifiAwareDiscoveryManager @Inject constructor(
             current.copy(peers = current.peers.map {
                 if (it.peerHandle.hashCode() == handleId) it.copy(isActive = false) else it
             })
-        }
-    }
-
-    private fun schedulePeerTimeoutCheck() {
-        scope.launch {
-            delay(peerTimeoutMillis + 1_000)
-            val cutoff = System.currentTimeMillis() - peerTimeoutMillis
-            _state.update { current ->
-                current.copy(peers = current.peers.map {
-                    if (it.lastSeenMillis < cutoff) it.copy(isActive = false) else it
-                })
-            }
         }
     }
 
